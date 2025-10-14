@@ -1951,18 +1951,22 @@ dw_read(tdata_t *td, Elf *elf, char *filename __unused)
 		    dwarf_errmsg(dw.dw_err));
 	}
 
+	while (1) {
+	  static int debug_f = 0;
+	  debug_f = debug_f + 1;
 	if ((rc = dwarf_next_cu_header_b(dw.dw_dw, &hdrlen, &vers, &abboff,
 	    &addrsz, &offsz, NULL, &nxthdr, &dw.dw_err)) != DW_DLV_OK) {
 		if (dw.dw_err.err_error == DW_DLE_NO_ENTRY)
-			exit(0);
+		        break;
 		else
 			terminate("rc = %d %s\n", rc, dwarf_errmsg(dw.dw_err));
 	}
 	if ((cu = die_sibling(&dw, NULL)) == NULL ||
 	    (((child = die_child(&dw, cu)) == NULL) &&
 	    should_have_dwarf(elf))) {
+	        break;
 		terminate("file does not contain dwarf type data "
-		    "(try compiling with -g)\n");
+			  "(try compiling with  %d -g)\n", debug_f);
 	} else if (child == NULL) {
 		return (0);
 	}
@@ -2013,10 +2017,7 @@ dw_read(tdata_t *td, Elf *elf, char *filename __unused)
 
 	if ((child = die_child(&dw, cu)) != NULL)
 		die_create(&dw, child);
-
-	if ((rc = dwarf_next_cu_header_b(dw.dw_dw, &hdrlen, &vers, &abboff,
-	    &addrsz, &offsz, NULL, &nxthdr, &dw.dw_err)) != DW_DLV_NO_ENTRY)
-		terminate("multiple compilation units not supported\n");
+	}
 
 	(void) dwarf_finish(dw.dw_dw, &dw.dw_err);
 
@@ -2025,6 +2026,7 @@ dw_read(tdata_t *td, Elf *elf, char *filename __unused)
 	cvt_fixups(td, dw.dw_ptrsz);
 
 	/* leak the dwarf_t */
+	
 
 	return (0);
 }
