@@ -1951,12 +1951,59 @@ dw_read(tdata_t *td, Elf *elf, char *filename __unused)
 		    dwarf_errmsg(dw.dw_err));
 	}
 
+	int cu_counter = 0;
+	while (1) {
+
 	if ((rc = dwarf_next_cu_header_b(dw.dw_dw, &hdrlen, &vers, &abboff,
 	    &addrsz, &offsz, NULL, &nxthdr, &dw.dw_err)) != DW_DLV_OK) {
 		if (dw.dw_err.err_error == DW_DLE_NO_ENTRY)
-			exit(0);
+		        break;
 		else
 			terminate("rc = %d %s\n", rc, dwarf_errmsg(dw.dw_err));
+	} else {
+	        ++cu_counter;
+	}
+	}
+
+        (void) dwarf_finish(dw.dw_dw, &dw.dw_err);
+
+	for (int i = 0; i < cu_counter; ++i) {
+
+	bzero(&dw, sizeof (dwarf_t));
+	dw.dw_td = td;
+	dw.dw_ptrsz = elf_ptrsz(elf);
+	dw.dw_mfgtid_last = TID_MFGTID_BASE;
+	dw.dw_tidhash = hash_new(TDESC_HASH_BUCKETS, tdesc_idhash, tdesc_idcmp);
+	dw.dw_fwdhash = hash_new(TDESC_HASH_BUCKETS, tdesc_namehash,
+	    tdesc_namecmp);
+	dw.dw_enumhash = hash_new(TDESC_HASH_BUCKETS, tdesc_namehash,
+	    tdesc_namecmp);
+
+	if ((rc = dwarf_elf_init(elf, DW_DLC_READ, NULL, NULL, &dw.dw_dw,
+	    &dw.dw_err)) == DW_DLV_NO_ENTRY) {
+		if (should_have_dwarf(elf)) {
+			errno = ENOENT;
+			return (-1);
+		} else {
+			return (0);
+		}
+	} else if (rc != DW_DLV_OK) {
+		if (dwarf_errno(dw.dw_err) == DW_DLE_DEBUG_INFO_NULL) {
+			/*
+			 * There's no type data in the DWARF section, but
+			 * libdwarf is too clever to handle that properly.
+			 */
+			return (0);
+		}
+
+		terminate("failed to initialize DWARF: %s\n",
+		    dwarf_errmsg(dw.dw_err));
+	}
+
+	for (int j = 0; j < i; ++j) {
+	dwarf_next_cu_header_b(dw.dw_dw, &hdrlen, &vers, &abboff,
+			       &addrsz, &offsz, NULL, &nxthdr, &dw.dw_err);
+
 	}
 	if ((cu = die_sibling(&dw, NULL)) == NULL ||
 	    (((child = die_child(&dw, cu)) == NULL) &&
@@ -2014,10 +2061,6 @@ dw_read(tdata_t *td, Elf *elf, char *filename __unused)
 	if ((child = die_child(&dw, cu)) != NULL)
 		die_create(&dw, child);
 
-	if ((rc = dwarf_next_cu_header_b(dw.dw_dw, &hdrlen, &vers, &abboff,
-	    &addrsz, &offsz, NULL, &nxthdr, &dw.dw_err)) != DW_DLV_NO_ENTRY)
-		terminate("multiple compilation units not supported\n");
-
 	(void) dwarf_finish(dw.dw_dw, &dw.dw_err);
 
 	die_resolve(&dw);
@@ -2025,6 +2068,8 @@ dw_read(tdata_t *td, Elf *elf, char *filename __unused)
 	cvt_fixups(td, dw.dw_ptrsz);
 
 	/* leak the dwarf_t */
+
+        }
 
 	return (0);
 }
