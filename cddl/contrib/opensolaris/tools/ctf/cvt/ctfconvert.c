@@ -38,6 +38,7 @@
 #include <fcntl.h>
 #include <libgen.h>
 #include <errno.h>
+#include <libdwarf.h>
 #include <assert.h>
 
 #include "ctftools.h"
@@ -79,7 +80,7 @@ handle_sig(int sig)
 }
 
 static int
-file_read(tdata_t *td, char *filename, int ignore_non_c)
+file_read(tdata_t *td, char *filename, int ignore_non_c __unused)
 {
 	typedef int (*reader_f)(tdata_t *, Elf *, char *);
 	static reader_f readers[] = {
@@ -142,6 +143,70 @@ file_read(tdata_t *td, char *filename, int ignore_non_c)
 	(void) close(fd);
 
 	return (rc);
+}
+
+/*
+ * file_read_multiCU -- read all DWARF CUs from a linked binary.
+ *
+ * Iterates over every CU in the file's .debug_info via
+ * dwarf_next_cu_header(), merges each into mstrtd, then frees
+ * the per-CU tdata_t.  Nodes conjured into the master carry
+ * TDESC_F_REFCOUNTED so they survive the per-CU tdata_free().
+ *
+ * Returns 1 if at least one CU was processed, 0 if no DWARF found.
+ */
+static int
+file_read_multiCU(tdata_t *mstrtd, char *filename, int ignore_non_c __unused)
+{
+	Elf		*elf;
+	int		 fd, found = 0;
+	Dwarf_Debug	 dbg;
+	Dwarf_Error	 derr;
+	Dwarf_Unsigned	 next_cu_offset;
+
+	if ((fd = open(filename, O_RDONLY)) < 0)
+		terminate("failed to open %s", filename);
+
+	(void) elf_version(EV_CURRENT);
+	if ((elf = elf_begin(fd, ELF_C_READ, NULL)) == NULL) {
+		(void) close(fd);
+		terminate("failed to read ELF %s: %s\n", filename,
+		    elf_errmsg(-1));
+	}
+
+	if (dwarf_elf_init(elf, DW_DLC_READ, NULL, NULL, &dbg, &derr)
+	    != DW_DLV_OK) {
+		(void) elf_end(elf);
+		(void) close(fd);
+		return (0);
+	}
+
+	for (;;) {
+		Dwarf_Unsigned	 cu_hdr_len, abbrev_off;
+		Dwarf_Half	 ver, addr_sz;
+		tdata_t		*cutd;
+		int		 ret;
+
+		ret = dwarf_next_cu_header(dbg, &cu_hdr_len, &ver,
+		    &abbrev_off, &addr_sz, &next_cu_offset, &derr);
+		if (ret == DW_DLV_NO_ENTRY)
+			break;
+		if (ret != DW_DLV_OK)
+			terminate("dwarf_next_cu_header: %s\n",
+			    dwarf_errmsg(derr));
+
+		cutd = tdata_new();
+		if (dw_read(cutd, elf, filename) != 0) {
+			merge_into_master(cutd, mstrtd, NULL, 1);
+			found = 1;
+		}
+		tdata_free(cutd);
+	}
+
+	(void) dwarf_finish(dbg, &derr);
+	(void) elf_end(elf);
+	(void) close(fd);
+	return (found);
 }
 
 int
@@ -228,16 +293,22 @@ main(int argc, char **argv)
 	signal(SIGTERM, handle_sig);
 #endif
 
-	filetd = tdata_new();
-
-	if (!file_read(filetd, infile, ignore_non_c))
-		terminate("%s doesn't have type data to convert\n", infile);
-
-	if (verbose)
-		iidesc_stats(filetd->td_iihash);
-
 	mstrtd = tdata_new();
-	merge_into_master(filetd, mstrtd, NULL, 1);
+
+	/*
+	 * Try the multi-CU path first.  Fall back to the original
+	 * single-CU path when no DWARF is found.
+	 */
+	if (!file_read_multiCU(mstrtd, infile, ignore_non_c)) {
+		filetd = tdata_new();
+		if (!file_read(filetd, infile, ignore_non_c))
+			terminate("%s doesn't have type data to convert\n",
+			    infile);
+		if (verbose)
+			iidesc_stats(filetd->td_iihash);
+		merge_into_master(filetd, mstrtd, NULL, 1);
+		tdata_free(filetd);
+	}
 
 	tdata_label_add(mstrtd, label, CTF_LABEL_LASTIDX);
 

@@ -245,6 +245,7 @@ struct tdesc {
 	int t_flags;
 	int t_vgen;	/* Visitation generation (see traverse.c) */
 	int t_emark;	/* Equality mark (see equiv_cb() in merge.c) */
+	int t_refcnt;	/* Reference count; 0 = untracked (free normally) */
 };
 
 #define	t_intr		t_data.intr
@@ -257,6 +258,13 @@ struct tdesc {
 #define	TDESC_F_ISROOT		0x1	/* Has an iidesc_t (see below) */
 #define	TDESC_F_GLOBAL		0x2
 #define	TDESC_F_RESOLVED	0x4
+/*
+ * Set on nodes conjured into a master tdata_t.  tdesc_free_cb() will
+ * decrement t_refcnt instead of freeing immediately; the node is freed
+ * only when the count reaches zero.  This lets per-CU tdata_t structures
+ * be destroyed after each merge without corrupting the master graph.
+ */
+#define	TDESC_F_REFCOUNTED	0x8
 
 /*
  * iidesc_t (Interesting Item DESCription) nodes point to tdesc_t nodes that
@@ -423,6 +431,31 @@ int tdata_label_find(tdata_t *, char *);
 void tdata_label_free(tdata_t *);
 void tdata_merge(tdata_t *, tdata_t *);
 void tdata_label_newmax(tdata_t *, int);
+
+/*
+ * Reference-counting helpers for tdesc_t nodes carrying TDESC_F_REFCOUNTED.
+ * Placed here so that tdesc_free() is already declared above.
+ *
+ * tdesc_ref  -- increment the reference count.
+ * tdesc_rele -- release one reference; frees the node when count hits zero.
+ *
+ * Only call these on nodes that have TDESC_F_REFCOUNTED set (i.e. nodes
+ * conjured into a master tdata_t by conjure_template() in merge.c).
+ */
+static __inline void
+tdesc_ref(tdesc_t *tdp)
+{
+	tdp->t_refcnt++;
+}
+
+static __inline void
+tdesc_rele(tdesc_t *tdp)
+{
+	if (--tdp->t_refcnt == 0) {
+		tdp->t_flags &= ~TDESC_F_REFCOUNTED;
+		tdesc_free(tdp);
+	}
+}
 
 /* util.c */
 int streq(const char *, const char *);

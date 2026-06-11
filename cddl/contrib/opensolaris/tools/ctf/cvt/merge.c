@@ -716,6 +716,8 @@ conjure_template(tdesc_t *old, int newselfid)
 	new->t_size = old->t_size;
 	new->t_id = newselfid;
 	new->t_flags = old->t_flags;
+	new->t_flags |= TDESC_F_REFCOUNTED;
+	new->t_refcnt = 1;
 
 	return (new);
 }
