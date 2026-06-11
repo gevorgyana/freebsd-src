@@ -1947,72 +1947,76 @@ dw_read(tdata_t *td, Elf *elf, char *filename __unused)
 		    dwarf_errmsg(dw.dw_err));
 	}
 
-	if ((rc = dwarf_next_cu_header_b(dw.dw_dw, &hdrlen, &vers, &abboff,
-	    &addrsz, &offsz, NULL, &nxthdr, &dw.dw_err)) != DW_DLV_OK) {
-		if (dw.dw_err.err_error == DW_DLE_NO_ENTRY)
-			exit(0);
-		else
-			terminate("rc = %d %s\n", rc, dwarf_errmsg(dw.dw_err));
-	}
-	if ((cu = die_sibling(&dw, NULL)) == NULL ||
-	    (((child = die_child(&dw, cu)) == NULL) &&
-	    should_have_dwarf(elf))) {
-		terminate("file does not contain dwarf type data "
-		    "(try compiling with -g)\n");
-	} else if (child == NULL) {
-		return (0);
-	}
-
-	dw.dw_maxoff = nxthdr - 1;
-
-	if (dw.dw_maxoff > TID_FILEMAX)
-		terminate("file contains too many types\n");
-
-	debug(1, "DWARF version: %d\n", vers);
-	if (vers < 2 || vers > 4) {
-		terminate("file contains incompatible version %d DWARF code "
-		    "(version 2, 3 or 4 required)\n", vers);
-	}
-
-	if (die_string(&dw, cu, DW_AT_producer, &prod, 0)) {
-		debug(1, "DWARF emitter: %s\n", prod);
-		free(prod);
-	}
-
-	if (dwarf_attrval_unsigned(cu, DW_AT_language, &lang, &dw.dw_err) == 0)
-		switch (lang) {
-		case DW_LANG_C:
-		case DW_LANG_C89:
-		case DW_LANG_C99:
-		case DW_LANG_C11:
-		case DW_LANG_C_plus_plus:
-		case DW_LANG_C_plus_plus_03:
-		case DW_LANG_C_plus_plus_11:
-		case DW_LANG_C_plus_plus_14:
-		case DW_LANG_Mips_Assembler:
+	/* multi-CU loop: iterate over every compilation unit in the file */
+	for (;;) {
+		rc = dwarf_next_cu_header_b(dw.dw_dw, &hdrlen, &vers,
+		    &abboff, &addrsz, &offsz, NULL, &nxthdr, &dw.dw_err);
+		if (rc == DW_DLV_NO_ENTRY)
 			break;
-		default:
-			terminate("file contains DWARF for unsupported "
-			    "language %#x", lang);
+		if (rc != DW_DLV_OK) {
+			if (dw.dw_err.err_error == DW_DLE_NO_ENTRY)
+				break;
+			terminate("rc = %d %s\n", rc,
+			    dwarf_errmsg(dw.dw_err));
 		}
-	else
-		warning("die %llu: failed to get language attribute: %s\n",
-		    die_off(&dw, cu), dwarf_errmsg(dw.dw_err));
 
-	if ((dw.dw_cuname = die_name(&dw, cu)) != NULL) {
-		char *base = xstrdup(basename(dw.dw_cuname));
-		free(dw.dw_cuname);
-		dw.dw_cuname = base;
+		if ((cu = die_sibling(&dw, NULL)) == NULL ||
+		    (((child = die_child(&dw, cu)) == NULL) &&
+		    should_have_dwarf(elf))) {
+			terminate("file does not contain dwarf type data "
+			    "(try compiling with -g)\n");
+		} else if (child == NULL) {
+			continue;
+		}
 
-		debug(1, "CU name: %s\n", dw.dw_cuname);
+		dw.dw_maxoff = nxthdr - 1;
+		if (dw.dw_maxoff > TID_FILEMAX)
+			terminate("file contains too many types\n");
+
+		debug(1, "DWARF version: %d\n", vers);
+		if (vers < 2 || vers > 4) {
+			terminate("file contains incompatible version %d "
+			    "DWARF code (version 2, 3 or 4 required)\n",
+			    vers);
+		}
+
+		if (die_string(&dw, cu, DW_AT_producer, &prod, 0)) {
+			debug(1, "DWARF emitter: %s\n", prod);
+			free(prod);
+		}
+
+		if (dwarf_attrval_unsigned(cu, DW_AT_language, &lang,
+		    &dw.dw_err) == 0)
+			switch (lang) {
+			case DW_LANG_C:
+			case DW_LANG_C89:
+			case DW_LANG_C99:
+			case DW_LANG_C11:
+			case DW_LANG_C_plus_plus:
+			case DW_LANG_C_plus_plus_03:
+			case DW_LANG_C_plus_plus_11:
+			case DW_LANG_C_plus_plus_14:
+			case DW_LANG_Mips_Assembler:
+				break;
+			default:
+				terminate("file contains DWARF for unsupported "
+				    "language %#x", lang);
+			}
+		else
+			warning("die %llu: failed to get language attribute: "
+			    "%s\n", die_off(&dw, cu),
+			    dwarf_errmsg(dw.dw_err));
+
+		if ((dw.dw_cuname = die_name(&dw, cu)) != NULL) {
+			char *base = xstrdup(basename(dw.dw_cuname));
+			free(dw.dw_cuname);
+			dw.dw_cuname = base;
+			debug(1, "CU name: %s\n", dw.dw_cuname);
+		}
+
+		if ((child = die_child(&dw, cu)) != NULL)
+			die_create(&dw, child);
 	}
-
-	if ((child = die_child(&dw, cu)) != NULL)
-		die_create(&dw, child);
-
-	if ((rc = dwarf_next_cu_header_b(dw.dw_dw, &hdrlen, &vers, &abboff,
-	    &addrsz, &offsz, NULL, &nxthdr, &dw.dw_err)) != DW_DLV_NO_ENTRY)
-		terminate("multiple compilation units not supported\n");
 
 	(void) dwarf_finish(dw.dw_dw, &dw.dw_err);
 

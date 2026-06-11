@@ -252,13 +252,25 @@ static void
 tdesc_free_cb(void *arg, void *private __unused)
 {
 	tdesc_t *tdp = arg;
+
+	/*
+	 * If this node has been promoted into a master tdata_t (indicated by
+	 * TDESC_F_REFCOUNTED), decrement its reference count.  Only release
+	 * the memory when the count reaches zero.  This allows per-CU
+	 * tdata_t structures to be freed after each merge without touching
+	 * nodes the master still owns.
+	 */
+	if (tdp->t_flags & TDESC_F_REFCOUNTED) {
+		if (--tdp->t_refcnt > 0)
+			return;
+		tdp->t_flags &= ~TDESC_F_REFCOUNTED;
+	}
+
 	if (tdp->t_name)
 		free(tdp->t_name);
 	if (free_cbs[tdp->t_type])
 		free_cbs[tdp->t_type](tdp);
 	free(tdp);
-
-	return;
 }
 
 void
